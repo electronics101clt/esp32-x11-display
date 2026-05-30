@@ -42,58 +42,62 @@ struct Button {
   const char* label;
 };
 
-// Button layout with text labels
+// Button layout with text labels - 1024x600 fullscreen
 Button buttons[] = {
   // Top row
-  {24, 64, 80, 56, COL_POWER_OFF, "POWER", "POWER"},
-  {120, 64, 72, 56, COL_MUTE, "MUTE", "MUTE"},
-  {208, 64, 72, 56, MD_SURFACE_CONT, "SOURCE", "SRC"},
+  {30, 70, 100, 60, COL_POWER_OFF, "POWER", "POWER"},
+  {150, 70, 90, 60, COL_MUTE, "MUTE", "MUTE"},
+  {260, 70, 90, 60, MD_SURFACE_CONT, "SOURCE", "SRC"},
 
   // Volume & Channel
-  {24, 136, 64, 48, COL_VOL, "VOL+", "VOL+"},
-  {96, 136, 64, 48, COL_VOL, "VOL-", "VOL-"},
-  {176, 136, 64, 48, COL_CH, "CH+", "CH+"},
-  {248, 136, 64, 48, COL_CH, "CH-", "CH-"},
+  {30, 150, 80, 55, COL_VOL, "VOL+", "VOL+"},
+  {120, 150, 80, 55, COL_VOL, "VOL-", "VOL-"},
+  {220, 150, 80, 55, COL_CH, "CH+", "CH+"},
+  {310, 150, 80, 55, COL_CH, "CH-", "CH-"},
 
-  // Number pad
-  {344, 64, 56, 48, COL_NUM, "1", "1"},
-  {408, 64, 56, 48, COL_NUM, "2", "2"},
-  {472, 64, 56, 48, COL_NUM, "3", "3"},
-  {344, 120, 56, 48, COL_NUM, "4", "4"},
-  {408, 120, 56, 48, COL_NUM, "5", "5"},
-  {472, 120, 56, 48, COL_NUM, "6", "6"},
-  {344, 176, 56, 48, COL_NUM, "7", "7"},
-  {408, 176, 56, 48, COL_NUM, "8", "8"},
-  {472, 176, 56, 48, COL_NUM, "9", "9"},
-  {344, 232, 56, 48, MD_SURFACE_CONT, "INFO", "i"},
-  {408, 232, 56, 48, COL_NUM, "0", "0"},
-  {472, 232, 56, 48, MD_SURFACE_CONT, "BACK", "<"},
+  // Number pad - right side
+  {550, 70, 70, 55, COL_NUM, "1", "1"},
+  {640, 70, 70, 55, COL_NUM, "2", "2"},
+  {730, 70, 70, 55, COL_NUM, "3", "3"},
+  {550, 140, 70, 55, COL_NUM, "4", "4"},
+  {640, 140, 70, 55, COL_NUM, "5", "5"},
+  {730, 140, 70, 55, COL_NUM, "6", "6"},
+  {550, 210, 70, 55, COL_NUM, "7", "7"},
+  {640, 210, 70, 55, COL_NUM, "8", "8"},
+  {730, 210, 70, 55, COL_NUM, "9", "9"},
+  {550, 280, 70, 55, MD_SURFACE_CONT, "INFO", "INFO"},
+  {640, 280, 70, 55, COL_NUM, "0", "0"},
+  {730, 280, 70, 55, MD_SURFACE_CONT, "BACK", "BACK"},
 
-  // D-pad
-  {112, 208, 56, 48, COL_NAV, "UP", "^"},
-  {112, 312, 56, 48, COL_NAV, "DOWN", "v"},
-  {48, 260, 56, 48, COL_NAV, "LEFT", "<"},
-  {176, 260, 56, 48, COL_NAV, "RIGHT", ">"},
-  {112, 260, 56, 48, COL_OK, "OK", "OK"},
+  // D-pad - center left
+  {150, 240, 70, 55, COL_NAV, "UP", "UP"},
+  {150, 370, 70, 55, COL_NAV, "DOWN", "DOWN"},
+  {60, 305, 70, 55, COL_NAV, "LEFT", "LEFT"},
+  {240, 305, 70, 55, COL_NAV, "RIGHT", "RIGHT"},
+  {150, 305, 70, 55, COL_OK, "OK", "OK"},
 
   // Menu row
-  {48, 376, 60, 40, MD_SURFACE_CONT, "MENU", "MENU"},
-  {116, 376, 60, 40, MD_SURFACE_CONT, "HOME", "HOME"},
-  {184, 376, 60, 40, MD_SURFACE_CONT, "BACK", "BACK"},
+  {60, 450, 80, 50, MD_SURFACE_CONT, "MENU", "MENU"},
+  {160, 450, 80, 50, MD_SURFACE_CONT, "HOME", "HOME"},
+  {260, 450, 80, 50, MD_SURFACE_CONT, "EXIT", "EXIT"},
 
   // Media controls
-  {344, 296, 56, 40, COL_MEDIA, "REW", "<<"},
-  {408, 296, 56, 40, COL_MEDIA, "PLAY", ">"},
-  {472, 296, 56, 40, COL_MEDIA, "FF", ">>"},
-  {344, 344, 56, 40, COL_MEDIA, "STOP", "[]"},
-  {408, 344, 56, 40, COL_MEDIA, "PAUSE", "||"},
-  {472, 344, 56, 40, COL_MEDIA, "REC", "O"},
+  {550, 360, 70, 50, COL_MEDIA, "REW", "<<"},
+  {640, 360, 70, 50, COL_MEDIA, "PLAY", "PLAY"},
+  {730, 360, 70, 50, COL_MEDIA, "FF", ">>"},
+  {550, 420, 70, 50, COL_MEDIA, "STOP", "STOP"},
+  {640, 420, 70, 50, COL_MEDIA, "PAUSE", "PAUSE"},
+  {730, 420, 70, 50, COL_MEDIA, "REC", "REC"},
 
-  // Color buttons
-  {344, 400, 48, 32, COL_RED, "RED", ""},
-  {400, 400, 48, 32, COL_GREEN, "GREEN", ""},
-  {456, 400, 48, 32, COL_YELLOW, "YELLOW", ""},
-  {512, 400, 48, 32, COL_BLUE, "BLUE", ""},
+  // Color buttons - bottom right
+  {850, 70, 60, 45, COL_RED, "RED", ""},
+  {850, 130, 60, 45, COL_GREEN, "GREEN", ""},
+  {850, 190, 60, 45, COL_YELLOW, "YELLOW", ""},
+  {850, 250, 60, 45, COL_BLUE, "BLUE", ""},
+
+  // Guide/EPG
+  {930, 70, 70, 55, MD_SURFACE_CONT, "GUIDE", "GUIDE"},
+  {930, 140, 70, 55, MD_SURFACE_CONT, "LIST", "LIST"},
 };
 
 const int numButtons = sizeof(buttons) / sizeof(Button);
@@ -229,7 +233,7 @@ void createWindow(uint32_t vis) {
   w32(&r[4], windowID);
   w32(&r[8], rootWindow);
   w16(&r[12], 0); w16(&r[14], 0);
-  w16(&r[16], 580); w16(&r[18], 448);
+  w16(&r[16], 1024); w16(&r[18], 600);  // Fullscreen
   w16(&r[20], 0); w16(&r[22], 1);
   w32(&r[24], vis);
   w32(&r[28], 0x0A02);
@@ -344,7 +348,7 @@ void drawButton(int16_t x, int16_t y, uint16_t w, uint16_t h, uint32_t color, co
 
 void drawStatusBar() {
   setColor(MD_SURFACE_CONT);
-  fillRect(0, 0, 580, 48);
+  fillRect(0, 0, 1024, 48);
 
   // Power indicator
   setColor(powerOn ? COL_POWER_ON : COL_POWER_OFF);
@@ -364,7 +368,7 @@ void drawStatusBar() {
 
   // Divider
   setColor(MD_OUTLINE);
-  fillRect(0, 47, 580, 1);
+  fillRect(0, 47, 1024, 1);
 }
 
 void drawUI() {
