@@ -417,9 +417,23 @@ CPU usage on ESP32: ~5% idle, ~15% during drawing.
 - Window should now persist and redraw like proper desktop applications
 - Pushed to GitHub: https://github.com/electronics101clt/esp32-x11-display
 
+**2026-05-30 - ICCCM Approach Reverted**
+- Attempted full ICCCM compliance with InternAtom requests for WM_PROTOCOLS, WM_DELETE_WINDOW
+- Added WM_CLASS, WM_HINTS properties for complete window manager integration
+- **RESULT: FAILED** - The complex InternAtom-based approach broke the working code
+- Simple "squares" version worked but the ICCCM version did not display anything
+- **Reverted to simplified approach:**
+  - Removed InternAtom complexity entirely
+  - Use predefined atoms directly (WM_NAME=39, STRING=31)
+  - Simple window with backing-store + event-mask
+  - Light gray background (0xC0C0C0)
+  - Drawing functions available but not called (empty window for app development)
+  - Handles Expose, KeyPress, ButtonPress events
+- **Lesson learned:** Keep X11 implementation minimal on ESP32; complex protocols may not work with XServer XSDL
+
 ---
 
-**Project Status:** 🔧 In Progress - Testing window manager integration.
+**Project Status:** 🔧 In Progress - Simplified window ready for app development.
 
 ---
 
