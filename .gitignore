@@ -1,0 +1,19 @@
+# Arduino build artifacts
+*.elf
+*.bin
+*.hex
+build/
+
+# Debug logs
+*-logcat.txt
+*-session.txt
+
+# Temporary files
+Untitled*
+*.tmp
+*.bak
+
+# IDE files
+.vscode/
+.idea/
+*.swp
