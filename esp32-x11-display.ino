@@ -7,66 +7,73 @@ WiFiClient x11;
 const char* xserver = "192.168.4.2";
 const int xport = 6000;
 
+// X11 server resources
 uint32_t rootWindow = 0;
 uint32_t rootVisual = 0;
-uint32_t windowID = 0x01000001;
-uint32_t gcID = 0x01000002;
-uint32_t cursorID = 0x01000003;
-uint32_t cursorFont = 0;
+uint32_t ridBase = 0;
 
-// Track if we need to redraw
-bool needsRedraw = false;
+// Our resources
+uint32_t windowID = 0;
+uint32_t gcID = 0;
+
+// Atoms (obtained via InternAtom)
+uint32_t atomWmProtocols = 0;
+uint32_t atomWmDeleteWindow = 0;
+
+// Window dimensions
+uint16_t winWidth = 800;
+uint16_t winHeight = 480;
+
+// Sequence number for tracking requests
+uint16_t seqNum = 0;
 
 void setup() {
   Serial.begin(9600);
   delay(1000);
 
-  // Configure hotspot
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
   WiFi.softAP(ssid, password);
 
-  Serial.println("ESP32 Hotspot Started");
-  Serial.print("IP: ");
+  Serial.println("ESP32 X11 Application");
+  Serial.print("Hotspot IP: ");
   Serial.println(WiFi.softAPIP());
-  Serial.println("Waiting for Android to connect...");
+  Serial.println("Waiting for X server to connect...");
 
-  // Wait for Android
   while (WiFi.softAPgetStationNum() == 0) {
     delay(500);
     Serial.print(".");
   }
 
-  Serial.println("\nAndroid connected!");
+  Serial.println("\nClient connected!");
   delay(2000);
 
   connectToXServer();
 }
 
 void connectToXServer() {
-  Serial.println("\n=== Connecting to X Server ===");
+  Serial.println("\n=== X11 Connection ===");
 
   if (!x11.connect(xserver, xport)) {
-    Serial.println("Failed to connect");
+    Serial.println("Failed to connect to X server");
     delay(5000);
     ESP.restart();
     return;
   }
 
-  Serial.println("TCP connected to X server");
+  Serial.println("TCP connected");
 
-  // X11 Setup - byte order 'l' (little endian), protocol 11.0, no auth
+  // X11 connection setup
   uint8_t setup[] = {
-    0x6C, 0x00,  // 'l' = little endian, pad
-    0x0B, 0x00,  // major version 11
-    0x00, 0x00,  // minor version 0
-    0x00, 0x00,  // auth proto name length
-    0x00, 0x00,  // auth proto data length
+    0x6C, 0x00,  // little endian
+    0x0B, 0x00,  // protocol 11.0
+    0x00, 0x00,  // no auth name
+    0x00, 0x00,  // no auth data
     0x00, 0x00   // pad
   };
-
   x11.write(setup, sizeof(setup));
   x11.flush();
+  seqNum = 0;
 
   delay(500);
 
@@ -77,213 +84,140 @@ void connectToXServer() {
 
   // Read setup response
   uint8_t status = x11.read();
-  Serial.print("Setup status: ");
-  Serial.println(status);
-
   if (status != 1) {
-    Serial.println("X11 setup failed");
+    Serial.printf("X11 setup failed: %d\n", status);
     return;
   }
+  x11.read(); // skip pad
 
-  // Skip unused byte
-  x11.read();
-
-  // Read protocol version
   uint16_t protoMajor = x11.read() | (x11.read() << 8);
   uint16_t protoMinor = x11.read() | (x11.read() << 8);
-  Serial.printf("X11 Protocol: %d.%d\n", protoMajor, protoMinor);
+  Serial.printf("X11 Protocol %d.%d\n", protoMajor, protoMinor);
 
-  // Read additional data length
   uint16_t additionalLen = x11.read() | (x11.read() << 8);
-  Serial.printf("Additional data: %d words (%d bytes)\n", additionalLen, additionalLen * 4);
-
-  // Read the entire additional data into buffer
   int totalBytes = additionalLen * 4;
-  uint8_t* setupData = (uint8_t*)malloc(totalBytes);
-  if (!setupData) {
-    Serial.println("Failed to allocate setup buffer");
+
+  uint8_t* data = (uint8_t*)malloc(totalBytes);
+  if (!data) {
+    Serial.println("Memory allocation failed");
     return;
   }
 
   int bytesRead = 0;
   while (bytesRead < totalBytes) {
     if (x11.available()) {
-      setupData[bytesRead++] = x11.read();
+      data[bytesRead++] = x11.read();
     } else {
       delay(10);
     }
   }
-  Serial.printf("Read %d bytes of setup data\n", bytesRead);
 
-  // Parse setup data according to X11 protocol spec
-  uint32_t ridBase = setupData[4] | (setupData[5] << 8) | (setupData[6] << 16) | (setupData[7] << 24);
-  uint32_t ridMask = setupData[8] | (setupData[9] << 8) | (setupData[10] << 16) | (setupData[11] << 24);
-  Serial.printf("Resource ID base: 0x%08X mask: 0x%08X\n", ridBase, ridMask);
+  // Parse setup data
+  ridBase = data[4] | (data[5] << 8) | (data[6] << 16) | (data[7] << 24);
+  uint16_t vendorLen = data[16] | (data[17] << 8);
+  uint8_t numFormats = data[21];
 
-  uint16_t vendorLen = setupData[16] | (setupData[17] << 8);
-  uint8_t numFormats = setupData[21];
-  Serial.printf("Vendor length: %d, Formats: %d\n", vendorLen, numFormats);
-
-  // Calculate screen offset
   int vendorPad = (4 - (vendorLen % 4)) % 4;
   int screenOffset = 32 + vendorLen + vendorPad + (numFormats * 8);
-  Serial.printf("Screen data at offset: %d\n", screenOffset);
 
-  // Read root window
-  rootWindow = setupData[screenOffset] | (setupData[screenOffset+1] << 8) |
-               (setupData[screenOffset+2] << 16) | (setupData[screenOffset+3] << 24);
+  rootWindow = data[screenOffset] | (data[screenOffset+1] << 8) |
+               (data[screenOffset+2] << 16) | (data[screenOffset+3] << 24);
+  rootVisual = data[screenOffset+32] | (data[screenOffset+33] << 8) |
+               (data[screenOffset+34] << 16) | (data[screenOffset+35] << 24);
+
   Serial.printf("Root window: 0x%08X\n", rootWindow);
+  Serial.printf("Resource base: 0x%08X\n", ridBase);
 
-  // Root visual at offset +32
-  rootVisual = setupData[screenOffset+32] | (setupData[screenOffset+33] << 8) |
-               (setupData[screenOffset+34] << 16) | (setupData[screenOffset+35] << 24);
-  Serial.printf("Root visual: 0x%08X\n", rootVisual);
+  free(data);
 
-  uint8_t rootDepth = setupData[screenOffset+38];
-  Serial.printf("Root depth: %d\n", rootDepth);
-
-  // Use resource ID base for our IDs
+  // Allocate our resource IDs
   windowID = ridBase | 0x00000001;
   gcID = ridBase | 0x00000002;
-  cursorID = ridBase | 0x00000003;
-  cursorFont = ridBase | 0x00000004;
-  Serial.printf("Using window ID: 0x%08X\n", windowID);
 
-  free(setupData);
+  // Get required atoms for ICCCM compliance
+  atomWmProtocols = internAtom("WM_PROTOCOLS", false);
+  atomWmDeleteWindow = internAtom("WM_DELETE_WINDOW", false);
+  Serial.printf("WM_PROTOCOLS atom: %d\n", atomWmProtocols);
+  Serial.printf("WM_DELETE_WINDOW atom: %d\n", atomWmDeleteWindow);
 
-  Serial.println("X11 setup complete!");
-
-  // Setup desktop environment
-  openCursorFont();
-  createCursor();
-  setupRootWindow();
-
-  // Create window and GC
+  // Create graphics context
   createGC();
+
+  // Create main window
   createWindow();
 
-  // Set window title for window manager
-  setWMName("ESP32 Display");
+  // Set ICCCM properties for window manager
+  setWmName("ESP32 App");
+  setWmClass("esp32app", "ESP32App");
+  setWmHints();
+  setWmProtocols();
 
+  // Map (show) the window
   mapWindow();
 
-  // Wait for initial Expose event
-  Serial.println("Waiting for Expose event...");
+  Serial.println("Window created - waiting for Expose event...");
+
+  // Wait for initial expose
   if (waitForExpose()) {
-    drawContent();
+    Serial.println("Window is ready for drawing!");
   }
 }
 
-void openCursorFont() {
-  const char* fontName = "cursor";
-  uint8_t nameLen = strlen(fontName);
+uint32_t internAtom(const char* name, bool onlyIfExists) {
+  // InternAtom request (opcode 16)
+  uint8_t nameLen = strlen(name);
   uint8_t pad = (4 - (nameLen % 4)) % 4;
-  uint8_t reqLen = 12 + nameLen + pad;
+  uint8_t reqLen = 8 + nameLen + pad;
 
-  uint8_t req[32];
-  req[0] = 45;  // opcode: OpenFont
-  req[1] = 0;
+  uint8_t req[64];
+  req[0] = 16;  // opcode
+  req[1] = onlyIfExists ? 1 : 0;
   req[2] = (reqLen / 4) & 0xFF;
-  req[3] = 0;
-
-  req[4] = cursorFont & 0xFF;
-  req[5] = (cursorFont >> 8) & 0xFF;
-  req[6] = (cursorFont >> 16) & 0xFF;
-  req[7] = (cursorFont >> 24) & 0xFF;
-
-  req[8] = nameLen & 0xFF;
-  req[9] = (nameLen >> 8) & 0xFF;
-  req[10] = 0;
-  req[11] = 0;
+  req[3] = (reqLen / 4) >> 8;
+  req[4] = nameLen & 0xFF;
+  req[5] = (nameLen >> 8) & 0xFF;
+  req[6] = 0;
+  req[7] = 0;
 
   for (int i = 0; i < nameLen; i++) {
-    req[12 + i] = fontName[i];
+    req[8 + i] = name[i];
   }
   for (int i = 0; i < pad; i++) {
-    req[12 + nameLen + i] = 0;
+    req[8 + nameLen + i] = 0;
   }
 
   x11.write(req, reqLen);
   x11.flush();
-  Serial.println("Opened cursor font");
-  delay(100);
-}
+  seqNum++;
 
-void createCursor() {
-  uint8_t req[32];
-  req[0] = 94;  // opcode: CreateGlyphCursor
-  req[1] = 0;
-  req[2] = 8;   // length: 8 words
-  req[3] = 0;
+  // Wait for reply
+  unsigned long start = millis();
+  while (millis() - start < 2000) {
+    if (x11.available() >= 32) {
+      uint8_t reply[32];
+      for (int i = 0; i < 32; i++) {
+        reply[i] = x11.read();
+      }
 
-  req[4] = cursorID & 0xFF;
-  req[5] = (cursorID >> 8) & 0xFF;
-  req[6] = (cursorID >> 16) & 0xFF;
-  req[7] = (cursorID >> 24) & 0xFF;
-
-  req[8] = cursorFont & 0xFF;
-  req[9] = (cursorFont >> 8) & 0xFF;
-  req[10] = (cursorFont >> 16) & 0xFF;
-  req[11] = (cursorFont >> 24) & 0xFF;
-
-  req[12] = cursorFont & 0xFF;
-  req[13] = (cursorFont >> 8) & 0xFF;
-  req[14] = (cursorFont >> 16) & 0xFF;
-  req[15] = (cursorFont >> 24) & 0xFF;
-
-  req[16] = 68; req[17] = 0;  // source char (left_ptr)
-  req[18] = 69; req[19] = 0;  // mask char
-
-  // Foreground (black)
-  req[20] = 0x00; req[21] = 0x00;
-  req[22] = 0x00; req[23] = 0x00;
-  req[24] = 0x00; req[25] = 0x00;
-
-  // Background (white)
-  req[26] = 0xFF; req[27] = 0xFF;
-  req[28] = 0xFF; req[29] = 0xFF;
-  req[30] = 0xFF; req[31] = 0xFF;
-
-  x11.write(req, 32);
-  x11.flush();
-  Serial.println("Created cursor");
-  delay(100);
-}
-
-void setupRootWindow() {
-  uint8_t req[16];
-  req[0] = 2;   // opcode: ChangeWindowAttributes
-  req[1] = 0;
-  req[2] = 4;   // length: 4 words
-  req[3] = 0;
-
-  req[4] = rootWindow & 0xFF;
-  req[5] = (rootWindow >> 8) & 0xFF;
-  req[6] = (rootWindow >> 16) & 0xFF;
-  req[7] = (rootWindow >> 24) & 0xFF;
-
-  // Value mask: 0x4000 = cursor (bit 14)
-  req[8] = 0x00;
-  req[9] = 0x40;
-  req[10] = 0x00;
-  req[11] = 0x00;
-
-  req[12] = cursorID & 0xFF;
-  req[13] = (cursorID >> 8) & 0xFF;
-  req[14] = (cursorID >> 16) & 0xFF;
-  req[15] = (cursorID >> 24) & 0xFF;
-
-  x11.write(req, 16);
-  x11.flush();
-  Serial.println("Set cursor on root window");
-  delay(100);
+      if (reply[0] == 1) {  // Reply
+        uint32_t atom = reply[8] | (reply[9] << 8) | (reply[10] << 16) | (reply[11] << 24);
+        return atom;
+      } else if (reply[0] == 0) {  // Error
+        Serial.printf("InternAtom error: %d\n", reply[1]);
+        return 0;
+      }
+    }
+    delay(10);
+  }
+  Serial.println("InternAtom timeout");
+  return 0;
 }
 
 void createGC() {
-  uint8_t req[20];
-  req[0] = 55;  // opcode: CreateGC
+  uint8_t req[16];
+  req[0] = 55;  // CreateGC
   req[1] = 0;
-  req[2] = 5;   // length: 5 words
+  req[2] = 4;   // 4 words (no values)
   req[3] = 0;
 
   req[4] = gcID & 0xFF;
@@ -296,28 +230,22 @@ void createGC() {
   req[10] = (rootWindow >> 16) & 0xFF;
   req[11] = (rootWindow >> 24) & 0xFF;
 
-  // Value mask: foreground (bit 2)
-  req[12] = 0x04;
-  req[13] = 0x00;
-  req[14] = 0x00;
-  req[15] = 0x00;
+  // No value mask - use defaults
+  req[12] = 0;
+  req[13] = 0;
+  req[14] = 0;
+  req[15] = 0;
 
-  // Foreground color (white)
-  req[16] = 0xFF;
-  req[17] = 0xFF;
-  req[18] = 0xFF;
-  req[19] = 0xFF;
-
-  x11.write(req, 20);
+  x11.write(req, 16);
   x11.flush();
+  seqNum++;
   Serial.println("Created GC");
 }
 
 void createWindow() {
-  // CreateWindow with background-pixel, backing-store, and event-mask
-  // NO override-redirect - let window manager handle decorations
+  // CreateWindow with full event mask for input
   uint8_t req[44];
-  req[0] = 1;   // opcode: CreateWindow
+  req[0] = 1;   // CreateWindow
   req[1] = 0;   // depth: CopyFromParent
   req[2] = 11;  // length: 11 words
   req[3] = 0;
@@ -328,75 +256,79 @@ void createWindow() {
   req[6] = (windowID >> 16) & 0xFF;
   req[7] = (windowID >> 24) & 0xFF;
 
-  // Parent (root)
+  // Parent
   req[8] = rootWindow & 0xFF;
   req[9] = (rootWindow >> 8) & 0xFF;
   req[10] = (rootWindow >> 16) & 0xFF;
   req[11] = (rootWindow >> 24) & 0xFF;
 
-  // x, y position (let WM decide, but start at 0,0)
+  // Position (x=0, y=0 - let WM decide)
   req[12] = 0; req[13] = 0;
   req[14] = 0; req[15] = 0;
 
-  // width=1024, height=600
-  req[16] = 0x00; req[17] = 0x04;  // 1024
-  req[18] = 0x58; req[19] = 0x02;  // 600
+  // Size
+  req[16] = winWidth & 0xFF;
+  req[17] = (winWidth >> 8) & 0xFF;
+  req[18] = winHeight & 0xFF;
+  req[19] = (winHeight >> 8) & 0xFF;
 
-  // border width = 1 (visible border)
-  req[20] = 1; req[21] = 0;
+  // Border width
+  req[20] = 0; req[21] = 0;
 
-  // class: InputOutput (1)
+  // Class: InputOutput
   req[22] = 1; req[23] = 0;
 
-  // visual: copy from parent
-  req[24] = rootVisual & 0xFF;
-  req[25] = (rootVisual >> 8) & 0xFF;
-  req[26] = (rootVisual >> 16) & 0xFF;
-  req[27] = (rootVisual >> 24) & 0xFF;
+  // Visual: CopyFromParent (0)
+  req[24] = 0;
+  req[25] = 0;
+  req[26] = 0;
+  req[27] = 0;
 
   // Value mask: 0x0842
-  // bit 1 (0x0002): background-pixel
-  // bit 6 (0x0040): backing-store
-  // bit 11 (0x0800): event-mask
+  // bit 1: background-pixel
+  // bit 6: backing-store
+  // bit 11: event-mask
   req[28] = 0x42;
   req[29] = 0x08;
   req[30] = 0x00;
   req[31] = 0x00;
 
-  // Values in bit order (low to high):
-
-  // 1. background-pixel (bit 1) = dark gray
-  req[32] = 0x40;
-  req[33] = 0x40;
-  req[34] = 0x40;
+  // Background pixel (light gray = 0xD0D0D0)
+  req[32] = 0xD0;
+  req[33] = 0xD0;
+  req[34] = 0xD0;
   req[35] = 0x00;
 
-  // 2. backing-store (bit 6) = WhenMapped (1)
+  // Backing store = WhenMapped (1)
   req[36] = 0x01;
   req[37] = 0x00;
   req[38] = 0x00;
   req[39] = 0x00;
 
-  // 3. event-mask (bit 11) = ExposureMask (0x8000) + StructureNotifyMask (0x20000)
-  req[40] = 0x00;
+  // Event mask: comprehensive for app input
+  // KeyPress(0) | KeyRelease(1) | ButtonPress(2) | ButtonRelease(3) |
+  // PointerMotion(6) | Exposure(15) | StructureNotify(17) | FocusChange(21)
+  // = 0x22804F
+  req[40] = 0x4F;
   req[41] = 0x80;
-  req[42] = 0x02;
+  req[42] = 0x22;
   req[43] = 0x00;
 
   x11.write(req, 44);
   x11.flush();
-  Serial.printf("Created managed window 0x%08X (with backing-store)\n", windowID);
+  seqNum++;
+  Serial.printf("Created window 0x%08X (%dx%d)\n", windowID, winWidth, winHeight);
 }
 
-void setWMName(const char* name) {
-  // ChangeProperty request (opcode 18) to set WM_NAME
+void setWmName(const char* name) {
+  // ChangeProperty for WM_NAME (atom 39)
   uint8_t nameLen = strlen(name);
   uint8_t pad = (4 - (nameLen % 4)) % 4;
-  uint8_t reqLen = 24 + nameLen + pad;  // header + data
+  uint8_t reqLen = 24 + nameLen + pad;
 
   uint8_t req[64];
-  req[0] = 18;  // opcode: ChangeProperty
-  req[1] = 0;   // mode: Replace
+  req[0] = 18;  // ChangeProperty
+  req[1] = 0;   // Replace
   req[2] = (reqLen / 4) & 0xFF;
   req[3] = (reqLen / 4) >> 8;
 
@@ -406,48 +338,165 @@ void setWMName(const char* name) {
   req[6] = (windowID >> 16) & 0xFF;
   req[7] = (windowID >> 24) & 0xFF;
 
-  // Property atom: WM_NAME = 39
-  req[8] = 39;
-  req[9] = 0;
-  req[10] = 0;
-  req[11] = 0;
+  // Property: WM_NAME = 39
+  req[8] = 39; req[9] = 0; req[10] = 0; req[11] = 0;
 
-  // Type atom: STRING = 31
-  req[12] = 31;
-  req[13] = 0;
-  req[14] = 0;
-  req[15] = 0;
+  // Type: STRING = 31
+  req[12] = 31; req[13] = 0; req[14] = 0; req[15] = 0;
 
-  // Format: 8 (bytes)
-  req[16] = 8;
-  req[17] = 0;
-  req[18] = 0;
-  req[19] = 0;
+  // Format: 8
+  req[16] = 8; req[17] = 0; req[18] = 0; req[19] = 0;
 
-  // Length of data (in format units, so bytes here)
-  req[20] = nameLen;
-  req[21] = 0;
-  req[22] = 0;
-  req[23] = 0;
+  // Data length
+  req[20] = nameLen; req[21] = 0; req[22] = 0; req[23] = 0;
 
-  // The name string
-  for (int i = 0; i < nameLen; i++) {
-    req[24 + i] = name[i];
-  }
-  for (int i = 0; i < pad; i++) {
-    req[24 + nameLen + i] = 0;
-  }
+  for (int i = 0; i < nameLen; i++) req[24 + i] = name[i];
+  for (int i = 0; i < pad; i++) req[24 + nameLen + i] = 0;
 
   x11.write(req, reqLen);
   x11.flush();
-  Serial.printf("Set WM_NAME to '%s'\n", name);
+  seqNum++;
+  Serial.printf("Set WM_NAME: %s\n", name);
+}
+
+void setWmClass(const char* instance, const char* className) {
+  // WM_CLASS is two null-terminated strings
+  uint8_t instLen = strlen(instance);
+  uint8_t classLen = strlen(className);
+  uint8_t totalLen = instLen + 1 + classLen + 1;  // +1 for null terminators
+  uint8_t pad = (4 - (totalLen % 4)) % 4;
+  uint8_t reqLen = 24 + totalLen + pad;
+
+  uint8_t req[64];
+  req[0] = 18;  // ChangeProperty
+  req[1] = 0;   // Replace
+  req[2] = (reqLen / 4) & 0xFF;
+  req[3] = (reqLen / 4) >> 8;
+
+  req[4] = windowID & 0xFF;
+  req[5] = (windowID >> 8) & 0xFF;
+  req[6] = (windowID >> 16) & 0xFF;
+  req[7] = (windowID >> 24) & 0xFF;
+
+  // Property: WM_CLASS = 67
+  req[8] = 67; req[9] = 0; req[10] = 0; req[11] = 0;
+
+  // Type: STRING = 31
+  req[12] = 31; req[13] = 0; req[14] = 0; req[15] = 0;
+
+  // Format: 8
+  req[16] = 8; req[17] = 0; req[18] = 0; req[19] = 0;
+
+  // Data length
+  req[20] = totalLen; req[21] = 0; req[22] = 0; req[23] = 0;
+
+  int pos = 24;
+  for (int i = 0; i < instLen; i++) req[pos++] = instance[i];
+  req[pos++] = 0;  // null terminator
+  for (int i = 0; i < classLen; i++) req[pos++] = className[i];
+  req[pos++] = 0;  // null terminator
+  for (int i = 0; i < pad; i++) req[pos++] = 0;
+
+  x11.write(req, reqLen);
+  x11.flush();
+  seqNum++;
+  Serial.printf("Set WM_CLASS: %s/%s\n", instance, className);
+}
+
+void setWmHints() {
+  // WM_HINTS is 9 CARD32 values (36 bytes)
+  // Format: flags, input, initial_state, icon_pixmap, icon_window, icon_x, icon_y, icon_mask, window_group
+  uint8_t req[60];
+  req[0] = 18;  // ChangeProperty
+  req[1] = 0;   // Replace
+  req[2] = 15;  // length: (24 + 36) / 4 = 15 words
+  req[3] = 0;
+
+  req[4] = windowID & 0xFF;
+  req[5] = (windowID >> 8) & 0xFF;
+  req[6] = (windowID >> 16) & 0xFF;
+  req[7] = (windowID >> 24) & 0xFF;
+
+  // Property: WM_HINTS = 35
+  req[8] = 35; req[9] = 0; req[10] = 0; req[11] = 0;
+
+  // Type: WM_HINTS = 35
+  req[12] = 35; req[13] = 0; req[14] = 0; req[15] = 0;
+
+  // Format: 32
+  req[16] = 32; req[17] = 0; req[18] = 0; req[19] = 0;
+
+  // Data length (9 CARD32s)
+  req[20] = 9; req[21] = 0; req[22] = 0; req[23] = 0;
+
+  // flags: InputHint(1) | StateHint(2) = 3
+  req[24] = 3; req[25] = 0; req[26] = 0; req[27] = 0;
+
+  // input: True (1) - we want keyboard input
+  req[28] = 1; req[29] = 0; req[30] = 0; req[31] = 0;
+
+  // initial_state: NormalState (1)
+  req[32] = 1; req[33] = 0; req[34] = 0; req[35] = 0;
+
+  // icon_pixmap, icon_window, icon_x, icon_y, icon_mask, window_group (all 0)
+  for (int i = 36; i < 60; i++) req[i] = 0;
+
+  x11.write(req, 60);
+  x11.flush();
+  seqNum++;
+  Serial.println("Set WM_HINTS");
+}
+
+void setWmProtocols() {
+  // Set WM_PROTOCOLS with WM_DELETE_WINDOW
+  if (atomWmProtocols == 0 || atomWmDeleteWindow == 0) {
+    Serial.println("Missing atoms for WM_PROTOCOLS");
+    return;
+  }
+
+  uint8_t req[32];
+  req[0] = 18;  // ChangeProperty
+  req[1] = 0;   // Replace
+  req[2] = 7;   // length: (24 + 4) / 4 = 7 words
+  req[3] = 0;
+
+  req[4] = windowID & 0xFF;
+  req[5] = (windowID >> 8) & 0xFF;
+  req[6] = (windowID >> 16) & 0xFF;
+  req[7] = (windowID >> 24) & 0xFF;
+
+  // Property: WM_PROTOCOLS (obtained via InternAtom)
+  req[8] = atomWmProtocols & 0xFF;
+  req[9] = (atomWmProtocols >> 8) & 0xFF;
+  req[10] = (atomWmProtocols >> 16) & 0xFF;
+  req[11] = (atomWmProtocols >> 24) & 0xFF;
+
+  // Type: ATOM = 4
+  req[12] = 4; req[13] = 0; req[14] = 0; req[15] = 0;
+
+  // Format: 32
+  req[16] = 32; req[17] = 0; req[18] = 0; req[19] = 0;
+
+  // Data length: 1 atom
+  req[20] = 1; req[21] = 0; req[22] = 0; req[23] = 0;
+
+  // WM_DELETE_WINDOW atom
+  req[24] = atomWmDeleteWindow & 0xFF;
+  req[25] = (atomWmDeleteWindow >> 8) & 0xFF;
+  req[26] = (atomWmDeleteWindow >> 16) & 0xFF;
+  req[27] = (atomWmDeleteWindow >> 24) & 0xFF;
+
+  x11.write(req, 28);
+  x11.flush();
+  seqNum++;
+  Serial.println("Set WM_PROTOCOLS (WM_DELETE_WINDOW)");
 }
 
 void mapWindow() {
   uint8_t req[8];
-  req[0] = 8;   // opcode: MapWindow
+  req[0] = 8;  // MapWindow
   req[1] = 0;
-  req[2] = 2;   // length: 2 words
+  req[2] = 2;
   req[3] = 0;
 
   req[4] = windowID & 0xFF;
@@ -457,51 +506,45 @@ void mapWindow() {
 
   x11.write(req, 8);
   x11.flush();
-  Serial.println("Mapped window (waiting for WM to show it)");
+  seqNum++;
+  Serial.println("Mapped window");
 }
 
 bool waitForExpose() {
-  unsigned long startTime = millis();
-  while (millis() - startTime < 10000) {  // 10 second timeout
+  unsigned long start = millis();
+  while (millis() - start < 10000) {
     if (x11.available() >= 32) {
-      uint8_t eventCode = x11.read();
-
-      if (eventCode == 0) {  // X11 Error
-        uint8_t errorCode = x11.read();
-        uint16_t seqNum = x11.read() | (x11.read() << 8);
-        Serial.printf("X11 ERROR: code=%d seq=%d\n", errorCode, seqNum);
-        for (int i = 0; i < 28; i++) x11.read();
-        continue;
+      uint8_t event[32];
+      for (int i = 0; i < 32; i++) {
+        event[i] = x11.available() ? x11.read() : 0;
       }
 
-      // Drain rest of event
-      uint8_t eventData[31];
-      for (int i = 0; i < 31; i++) {
-        eventData[i] = x11.available() ? x11.read() : 0;
-      }
+      uint8_t code = event[0] & 0x7F;  // mask off "sent" bit
 
-      if (eventCode == 12) {  // Expose
-        Serial.println("Received Expose event!");
+      if (code == 0) {
+        Serial.printf("X11 Error: code=%d seq=%d\n", event[1], event[2] | (event[3] << 8));
+      } else if (code == 12) {  // Expose
         return true;
-      } else if (eventCode == 19) {  // MapNotify
-        Serial.println("Window mapped by WM");
-      } else if (eventCode == 22) {  // ConfigureNotify
-        Serial.println("Window configured by WM");
+      } else if (code == 19) {  // MapNotify
+        Serial.println("MapNotify received");
+      } else if (code == 22) {  // ConfigureNotify
+        Serial.println("ConfigureNotify received");
       } else {
-        Serial.printf("Event: %d\n", eventCode);
+        Serial.printf("Event: %d\n", code);
       }
     }
     delay(10);
   }
-  Serial.println("Timeout waiting for Expose");
   return false;
 }
 
-void setGCForeground(uint32_t color) {
+// === Drawing Functions (for your app) ===
+
+void setForeground(uint32_t color) {
   uint8_t req[16];
-  req[0] = 56;  // opcode: ChangeGC
+  req[0] = 56;  // ChangeGC
   req[1] = 0;
-  req[2] = 4;   // length: 4 words
+  req[2] = 4;
   req[3] = 0;
 
   req[4] = gcID & 0xFF;
@@ -509,10 +552,8 @@ void setGCForeground(uint32_t color) {
   req[6] = (gcID >> 16) & 0xFF;
   req[7] = (gcID >> 24) & 0xFF;
 
-  req[8] = 0x04;
-  req[9] = 0x00;
-  req[10] = 0x00;
-  req[11] = 0x00;
+  // foreground (bit 2)
+  req[8] = 0x04; req[9] = 0; req[10] = 0; req[11] = 0;
 
   req[12] = color & 0xFF;
   req[13] = (color >> 8) & 0xFF;
@@ -525,9 +566,9 @@ void setGCForeground(uint32_t color) {
 
 void fillRect(int16_t x, int16_t y, uint16_t w, uint16_t h) {
   uint8_t req[20];
-  req[0] = 70;  // opcode: PolyFillRectangle
+  req[0] = 70;  // PolyFillRectangle
   req[1] = 0;
-  req[2] = 5;   // length: 5 words
+  req[2] = 5;
   req[3] = 0;
 
   req[4] = windowID & 0xFF;
@@ -540,88 +581,159 @@ void fillRect(int16_t x, int16_t y, uint16_t w, uint16_t h) {
   req[10] = (gcID >> 16) & 0xFF;
   req[11] = (gcID >> 24) & 0xFF;
 
-  req[12] = x & 0xFF;
-  req[13] = (x >> 8) & 0xFF;
-  req[14] = y & 0xFF;
-  req[15] = (y >> 8) & 0xFF;
-  req[16] = w & 0xFF;
-  req[17] = (w >> 8) & 0xFF;
-  req[18] = h & 0xFF;
-  req[19] = (h >> 8) & 0xFF;
+  req[12] = x & 0xFF; req[13] = (x >> 8) & 0xFF;
+  req[14] = y & 0xFF; req[15] = (y >> 8) & 0xFF;
+  req[16] = w & 0xFF; req[17] = (w >> 8) & 0xFF;
+  req[18] = h & 0xFF; req[19] = (h >> 8) & 0xFF;
 
   x11.write(req, 20);
   x11.flush();
 }
 
-void drawContent() {
-  Serial.println("Drawing content...");
+void drawLine(int16_t x1, int16_t y1, int16_t x2, int16_t y2) {
+  uint8_t req[20];
+  req[0] = 65;  // PolyLine (CoordModeOrigin = 0)
+  req[1] = 0;   // CoordModeOrigin
+  req[2] = 5;
+  req[3] = 0;
 
-  // Draw colored rectangles
-  setGCForeground(0x00FF0000);  // Red
-  fillRect(50, 50, 200, 200);
+  req[4] = windowID & 0xFF;
+  req[5] = (windowID >> 8) & 0xFF;
+  req[6] = (windowID >> 16) & 0xFF;
+  req[7] = (windowID >> 24) & 0xFF;
 
-  setGCForeground(0x0000FF00);  // Green
-  fillRect(150, 100, 200, 200);
+  req[8] = gcID & 0xFF;
+  req[9] = (gcID >> 8) & 0xFF;
+  req[10] = (gcID >> 16) & 0xFF;
+  req[11] = (gcID >> 24) & 0xFF;
 
-  setGCForeground(0x000000FF);  // Blue
-  fillRect(250, 150, 200, 200);
+  req[12] = x1 & 0xFF; req[13] = (x1 >> 8) & 0xFF;
+  req[14] = y1 & 0xFF; req[15] = (y1 >> 8) & 0xFF;
+  req[16] = x2 & 0xFF; req[17] = (x2 >> 8) & 0xFF;
+  req[18] = y2 & 0xFF; req[19] = (y2 >> 8) & 0xFF;
 
-  // Draw a yellow rectangle
-  setGCForeground(0x00FFFF00);  // Yellow
-  fillRect(350, 200, 200, 200);
+  x11.write(req, 20);
+  x11.flush();
+}
 
-  // Draw white border around window content area
-  setGCForeground(0x00FFFFFF);  // White
-  fillRect(0, 0, 1024, 5);      // Top
-  fillRect(0, 595, 1024, 5);    // Bottom
-  fillRect(0, 0, 5, 600);       // Left
-  fillRect(1019, 0, 5, 600);    // Right
+// === Event Handling ===
 
-  Serial.println("Drawing complete!");
+void handleExpose(uint8_t* event) {
+  // Expose event - redraw window content
+  // Your app drawing code goes here
+  Serial.println("Expose - redrawing");
+
+  // Example: just clear to background color - window is empty and ready
+  // You can add your app's drawing code here
+}
+
+void handleKeyPress(uint8_t* event) {
+  // event[1] = keycode
+  uint8_t keycode = event[1];
+  uint16_t x = event[24] | (event[25] << 8);
+  uint16_t y = event[26] | (event[27] << 8);
+  Serial.printf("KeyPress: keycode=%d at (%d,%d)\n", keycode, x, y);
+
+  // Your keyboard handling code here
+}
+
+void handleKeyRelease(uint8_t* event) {
+  uint8_t keycode = event[1];
+  Serial.printf("KeyRelease: keycode=%d\n", keycode);
+}
+
+void handleButtonPress(uint8_t* event) {
+  uint8_t button = event[1];
+  uint16_t x = event[24] | (event[25] << 8);
+  uint16_t y = event[26] | (event[27] << 8);
+  Serial.printf("ButtonPress: button=%d at (%d,%d)\n", button, x, y);
+
+  // Your mouse button handling code here
+}
+
+void handleButtonRelease(uint8_t* event) {
+  uint8_t button = event[1];
+  uint16_t x = event[24] | (event[25] << 8);
+  uint16_t y = event[26] | (event[27] << 8);
+  Serial.printf("ButtonRelease: button=%d at (%d,%d)\n", button, x, y);
+}
+
+void handleMotionNotify(uint8_t* event) {
+  uint16_t x = event[24] | (event[25] << 8);
+  uint16_t y = event[26] | (event[27] << 8);
+  // Uncomment if you want motion events logged:
+  // Serial.printf("Motion: (%d,%d)\n", x, y);
+}
+
+void handleClientMessage(uint8_t* event) {
+  // Check for WM_DELETE_WINDOW
+  uint32_t messageType = event[8] | (event[9] << 8) | (event[10] << 16) | (event[11] << 24);
+  uint32_t data0 = event[12] | (event[13] << 8) | (event[14] << 16) | (event[15] << 24);
+
+  if (messageType == atomWmProtocols && data0 == atomWmDeleteWindow) {
+    Serial.println("Window close requested - restarting");
+    delay(1000);
+    ESP.restart();
+  }
+}
+
+void handleFocusIn(uint8_t* event) {
+  Serial.println("FocusIn - window has focus");
+}
+
+void handleFocusOut(uint8_t* event) {
+  Serial.println("FocusOut - window lost focus");
 }
 
 void loop() {
-  // Handle X11 events
+  // Process X11 events
   if (x11.available() >= 32) {
-    uint8_t code = x11.read();
-
-    // Read rest of event
-    uint8_t eventData[31];
-    for (int i = 0; i < 31; i++) {
-      eventData[i] = x11.available() ? x11.read() : 0;
+    uint8_t event[32];
+    for (int i = 0; i < 32; i++) {
+      event[i] = x11.available() ? x11.read() : 0;
     }
 
-    if (code == 0) {
-      // X11 Error
-      uint8_t errorCode = eventData[0];
-      uint16_t seqNum = eventData[1] | (eventData[2] << 8);
-      Serial.printf("X11 ERROR: code=%d seq=%d\n", errorCode, seqNum);
-    }
-    else if (code == 12) {
-      // Expose event - need to redraw
-      // eventData[0] = window (4 bytes), [4-5] = x, [6-7] = y, [8-9] = width, [10-11] = height, [12-13] = count
-      uint16_t count = eventData[12] | (eventData[13] << 8);
-      Serial.printf("Expose event (count=%d)\n", count);
+    uint8_t code = event[0] & 0x7F;
 
-      // Only redraw when count reaches 0 (last expose in series)
-      if (count == 0) {
-        drawContent();
-      }
-    }
-    else if (code == 22) {
-      // ConfigureNotify - window was moved/resized
-      Serial.println("ConfigureNotify - window reconfigured");
-    }
-    else if (code == 19) {
-      // MapNotify
-      Serial.println("MapNotify - window is now visible");
-    }
-    else if (code == 18) {
-      // UnmapNotify
-      Serial.println("UnmapNotify - window is now hidden");
-    }
-    else {
-      Serial.printf("Event: 0x%02X\n", code);
+    switch (code) {
+      case 0:  // Error
+        Serial.printf("X11 Error: code=%d seq=%d\n", event[1], event[2] | (event[3] << 8));
+        break;
+      case 2:  // KeyPress
+        handleKeyPress(event);
+        break;
+      case 3:  // KeyRelease
+        handleKeyRelease(event);
+        break;
+      case 4:  // ButtonPress
+        handleButtonPress(event);
+        break;
+      case 5:  // ButtonRelease
+        handleButtonRelease(event);
+        break;
+      case 6:  // MotionNotify
+        handleMotionNotify(event);
+        break;
+      case 9:  // FocusIn
+        handleFocusIn(event);
+        break;
+      case 10: // FocusOut
+        handleFocusOut(event);
+        break;
+      case 12: // Expose
+        handleExpose(event);
+        break;
+      case 19: // MapNotify
+        Serial.println("MapNotify");
+        break;
+      case 22: // ConfigureNotify
+        Serial.println("ConfigureNotify");
+        break;
+      case 33: // ClientMessage
+        handleClientMessage(event);
+        break;
+      default:
+        Serial.printf("Event: %d\n", code);
     }
   }
 
