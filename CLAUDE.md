@@ -431,9 +431,17 @@ CPU usage on ESP32: ~5% idle, ~15% during drawing.
   - Handles Expose, KeyPress, ButtonPress events
 - **Lesson learned:** Keep X11 implementation minimal on ESP32; complex protocols may not work with XServer XSDL
 
+**2026-05-30 - Restored Original Working Version**
+- User confirmed the simplified "empty window" version also didn't work
+- **Restored commit 112e0ed** - the original working squares version
+- This version actually draws visible content (colored squares/rectangles)
+- Uses direct drawing after MapWindow without waiting for Expose
+- No complex window manager integration - just basic CreateWindow + MapWindow + PolyFillRectangle
+- **This is the LAST KNOWN WORKING VERSION** on GitHub
+
 ---
 
-**Project Status:** 🔧 In Progress - Simplified window ready for app development.
+**Project Status:** ✅ Working - Original squares version restored to GitHub.
 
 ---
 
