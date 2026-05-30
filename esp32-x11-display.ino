@@ -101,9 +101,14 @@ void connectToXServer() {
 
   Serial.println("TCP connected to X server");
 
-  // X11 Setup
+  // X11 Setup - 12 bytes required
   uint8_t setup[] = {
-    0x6C, 0x00, 0x0B, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    0x6C, 0x00,  // 'l' = little endian, pad
+    0x0B, 0x00,  // major version 11
+    0x00, 0x00,  // minor version 0
+    0x00, 0x00,  // auth proto name length
+    0x00, 0x00,  // auth proto data length
+    0x00, 0x00   // pad (required!)
   };
 
   x11.write(setup, sizeof(setup));
@@ -174,6 +179,7 @@ void connectToXServer() {
   Serial.println("Waiting for Expose...");
   waitForExpose();
 
+  clearWindow();
   drawRemoteControl();
   Serial.println("Remote Control Ready!");
 }
@@ -259,6 +265,63 @@ void mapWindow() {
   x11.write(req, 8);
   x11.flush();
   Serial.println("Mapped window");
+
+  delay(100);
+  raiseWindow();
+}
+
+void raiseWindow() {
+  // ConfigureWindow request - raise window to top (above XSDL instruction screen)
+  uint8_t req[16];
+  req[0] = 12;  // opcode: ConfigureWindow
+  req[1] = 0;
+  req[2] = 4;   // length: 4 words
+  req[3] = 0;
+
+  req[4] = windowID & 0xFF;
+  req[5] = (windowID >> 8) & 0xFF;
+  req[6] = (windowID >> 16) & 0xFF;
+  req[7] = (windowID >> 24) & 0xFF;
+
+  // Value mask: 0x0040 = stack-mode (bit 6)
+  req[8] = 0x40;
+  req[9] = 0x00;
+  req[10] = 0x00;
+  req[11] = 0x00;
+
+  // Stack mode: 0 = Above (raise to top)
+  req[12] = 0x00;
+  req[13] = 0x00;
+  req[14] = 0x00;
+  req[15] = 0x00;
+
+  x11.write(req, 16);
+  x11.flush();
+  Serial.println("Raised window to top");
+}
+
+void clearWindow() {
+  // ClearArea request
+  uint8_t req[16];
+  req[0] = 61;  // opcode: ClearArea
+  req[1] = 1;   // exposures = true
+  req[2] = 4;   // length: 4 words
+  req[3] = 0;
+
+  req[4] = windowID & 0xFF;
+  req[5] = (windowID >> 8) & 0xFF;
+  req[6] = (windowID >> 16) & 0xFF;
+  req[7] = (windowID >> 24) & 0xFF;
+
+  req[8] = 0; req[9] = 0;    // x = 0
+  req[10] = 0; req[11] = 0;  // y = 0
+  req[12] = 0x00; req[13] = 0x04;  // width = 1024
+  req[14] = 0x58; req[15] = 0x02;  // height = 600
+
+  x11.write(req, 16);
+  x11.flush();
+  Serial.println("Cleared window");
+  delay(100);
 }
 
 void waitForExpose() {
