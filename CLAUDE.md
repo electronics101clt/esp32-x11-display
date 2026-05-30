@@ -406,11 +406,20 @@ CPU usage on ESP32: ~5% idle, ~15% during drawing.
 - Fixed cursorFont ID being overwritten with hardcoded value instead of using ridBase
 - Added X11 error detection in waitForExpose() and loop() for better debugging
 - Serial output now shows "X11 ERROR: code=N seq=N" when server returns errors
-- These fixes should resolve the window not appearing on XSDL
+
+**2026-05-30 - Window Manager Integration**
+- Removed override-redirect to let window manager handle decorations (title bar, borders)
+- Added backing-store = WhenMapped (bit 6) for content persistence when obscured
+- Added WM_NAME property using ChangeProperty (opcode 18) - window now titled "ESP32 Display"
+- Added StructureNotifyMask to receive MapNotify/ConfigureNotify events
+- Implemented proper Expose event handling in loop() to redraw when window uncovered
+- Refactored drawing into reusable fillRect() and drawContent() functions
+- Window should now persist and redraw like proper desktop applications
+- Pushed to GitHub: https://github.com/electronics101clt/esp32-x11-display
 
 ---
 
-**Project Status:** 🔧 In Progress - Testing protocol bug fixes.
+**Project Status:** 🔧 In Progress - Testing window manager integration.
 
 ---
 
@@ -445,11 +454,12 @@ CPU usage on ESP32: ~5% idle, ~15% during drawing.
    - Added `background-pixel` attribute (value mask bit 1 = 0x0002)
    - Transparent windows won't show content
 
-4. **Override-Redirect (FIXED)**
-   - Added `override-redirect = true` (value mask bit 9 = 0x0200)
-   - Bypasses window manager control
-   - Window appears directly without WM intervention
-   - Source: [Xlib Programming Manual](https://tronche.com/gui/x/xlib/window/attributes/override-redirect.html)
+4. **Override-Redirect (CHANGED 2026-05-30)**
+   - Initially added override-redirect = true to bypass WM
+   - Now REMOVED override-redirect to let WM manage the window properly
+   - Without WM management, window disappears when losing focus
+   - With WM management, window gets decorations (title bar, borders) and persists
+   - Added backing-store = WhenMapped (bit 6 = 0x0040, value 1) for content persistence
 
 5. **Expose Event Handling (FIXED)**
    - Added ExposureMask to event mask (bit 15 = 0x8000)
@@ -478,6 +488,18 @@ CPU usage on ESP32: ~5% idle, ~15% during drawing.
    - X11 errors have event code 0, followed by error code and sequence number
    - Now prints "X11 ERROR: code=N seq=N" for debugging
    - Helps identify which request failed and why
+
+10. **WM_NAME Property (ADDED 2026-05-30)**
+    - Set using ChangeProperty (opcode 18)
+    - Property atom: WM_NAME = 39, Type atom: STRING = 31
+    - Window now displays "ESP32 Display" in title bar
+    - Allows window manager to properly identify the window
+
+11. **Expose Event Redraw (ADDED 2026-05-30)**
+    - Handle Expose events (code 12) in main loop()
+    - Check count field - only redraw when count == 0 (last in series)
+    - Call drawContent() to repaint window when uncovered
+    - Window content now persists across focus changes
 
 ### X11 Protocol Key Points
 
